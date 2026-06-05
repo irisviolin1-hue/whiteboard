@@ -317,8 +317,6 @@ PYTHON_VERSION=3.11.9
 
 然後使用 `Manual Deploy -> Clear build cache & deploy` 重新部署。
 
-本版本在 v3「房間密碼、使用者名稱、多人游標」的基礎上，新增較接近正式多人協作白板產品的功能：
-
 
 
 > 注意：本版本「所有人離開房間後自動刪除房間資料」的設計，用於避免記憶體與 Render 暫存檔案持續累積。若要做成商用長期保存服務，建議改接 PostgreSQL / Redis / S3 類型儲存服務。
