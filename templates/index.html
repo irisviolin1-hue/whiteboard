@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>協作白板 v4｜WebSocket 企業展示版</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
+    <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+</head>
+<body>
+    <main class="app">
+        <section id="joinPage" class="join-page">
+            <div class="join-card enterprise-card">
+                <p class="eyebrow">WebSocket Collaborative Whiteboard</p>
+                <h1>協作白板 v4</h1>
+                <div class="feature-badges">
+                    <span>🔐 房間密碼</span>
+                    <span>👤 使用者名稱</span>
+                    <span>🖱️ 多人游標</span>
+                    <span>↩️ Undo / Redo</span>
+                    <span>▭ 形狀工具</span>
+                    <span>🗂️ 匯入 / 匯出 JSON</span>
+                </div>
+                <p class="subtitle">基於 WebSocket / Socket.IO 的多人協作與遠端白板系統，加入更接近正式產品的操作功能。</p>
+
+                <div class="join-form stacked">
+                    <input id="userNameInput" type="text" placeholder="你的名稱，例如：A同學" autocomplete="name" />
+                    <input id="joinRoomInput" type="text" placeholder="房間名稱，例如：project-demo" autocomplete="off" />
+                    <input id="roomPasswordInput" type="password" placeholder="房間密碼，可空白；同房間需一致" autocomplete="off" />
+                    <button id="joinBtn" class="primary-btn">進入房間</button>
+                </div>
+
+                <div class="join-actions">
+                    <button id="randomRoomBtn" class="ghost-btn">產生隨機房間</button>
+                </div>
+
+                <p class="hint">第一次進入房間時輸入的密碼會成為該房間密碼；所有人離開後房間資料與密碼會自動清除。</p>
+            </div>
+        </section>
+
+        <section id="whiteboardPage" class="whiteboard-page hidden">
+            <header class="topbar">
+                <div>
+                    <p class="eyebrow">Room</p>
+                    <h2 id="currentRoom">-</h2>
+                    <p class="version-tag">v4 WebSocket 企業展示版</p>
+                </div>
+                <div class="status-group">
+                    <span class="pill">你：<strong id="currentUser">-</strong></span>
+                    <span class="pill">人數：<strong id="roomCount">0</strong></span>
+                    <span class="pill" id="saveStatus">尚未同步</span>
+                    <button id="shareBtn" class="ghost-btn">複製分享連結</button>
+                    <button id="leaveBtn" class="danger-outline-btn">離開</button>
+                </div>
+            </header>
+
+            <div class="layout enterprise-layout">
+                <aside class="toolbar" aria-label="白板工具列">
+                    <div class="tool-section">
+                        <p class="tool-title">協作工具</p>
+                        <button id="selectBtn" class="tool-btn">🖱️ 滑鼠 / 選取</button>
+                        <button id="penBtn" class="tool-btn active">✏️ 畫筆</button>
+                        <button id="eraserBtn" class="tool-btn">🧽 橡皮擦</button>
+                        <button id="textBtn" class="tool-btn">🔤 文字框</button>
+                        <button id="stickyBtn" class="tool-btn">🟨 便利貼</button>
+                        <button id="imageBtn" class="tool-btn">🖼️ 上傳圖片</button>
+                        <input id="imageInput" class="hidden" type="file" accept="image/png,image/jpeg,image/webp" />
+                    </div>
+
+                    <div class="tool-section">
+                        <p class="tool-title">形狀工具</p>
+                        <button id="lineBtn" class="tool-btn">╱ 直線</button>
+                        <button id="rectBtn" class="tool-btn">▭ 矩形</button>
+                        <button id="ellipseBtn" class="tool-btn">◯ 圓形</button>
+                        <button id="arrowBtn" class="tool-btn">➜ 箭頭</button>
+                    </div>
+
+                    <div class="tool-section">
+                        <p class="tool-title">版本操作</p>
+                        <button id="undoBtn" class="tool-btn">↩️ 回上一步 Ctrl+Z</button>
+                        <button id="redoBtn" class="tool-btn">↪️ 重做 Ctrl+Y</button>
+                    </div>
+
+                    <div class="tool-section">
+                        <p class="tool-title">顏色</p>
+                        <div class="color-grid">
+                            <button class="color-btn" data-color="#111111" style="background:#111111"></button>
+                            <button class="color-btn" data-color="#e53935" style="background:#e53935"></button>
+                            <button class="color-btn" data-color="#1e88e5" style="background:#1e88e5"></button>
+                            <button class="color-btn" data-color="#43a047" style="background:#43a047"></button>
+                            <button class="color-btn" data-color="#fdd835" style="background:#fdd835"></button>
+                            <button class="color-btn" data-color="#8e24aa" style="background:#8e24aa"></button>
+                        </div>
+                        <label class="field-label" for="colorPicker">自訂顏色</label>
+                        <input id="colorPicker" type="color" value="#111111" />
+                    </div>
+
+                    <div class="tool-section">
+                        <p class="tool-title">筆刷 / 文字</p>
+                        <label class="field-label" for="brushSize">線條粗細</label>
+                        <input id="brushSize" type="range" min="1" max="40" value="5" />
+                        <span id="brushSizeLabel" class="small-text">5 px</span>
+                        <label class="field-label" for="fontSize">文字大小</label>
+                        <input id="fontSize" type="range" min="12" max="64" value="22" />
+                        <span id="fontSizeLabel" class="small-text">22 px</span>
+                    </div>
+
+                    <div class="tool-section">
+                        <p class="tool-title">檢視 / 輸出</p>
+                        <button id="gridBtn" class="tool-btn"># 格線背景</button>
+                        <button id="downloadPngBtn" class="tool-btn">下載 PNG</button>
+                        <button id="downloadJpgBtn" class="tool-btn">下載 JPG</button>
+                        <button id="exportJsonBtn" class="tool-btn">匯出 JSON</button>
+                        <button id="importJsonBtn" class="tool-btn">匯入 JSON</button>
+                        <input id="importJsonInput" class="hidden" type="file" accept="application/json,.json" />
+                    </div>
+
+                    <div class="tool-section">
+                        <button id="clearBtn" class="danger-btn">清除全部</button>
+                    </div>
+                </aside>
+
+                <section class="board-panel">
+                    <div class="board-header">
+                        <span id="toolHint">目前工具：畫筆</span>
+                        <span class="v4-notice">🔌 WebSocket 同步：畫筆、形狀、文字、圖片、Undo/Redo、游標與使用者狀態。</span>
+                    </div>
+
+                    <div id="userList" class="user-list" aria-label="在線使用者"></div>
+
+                    <div id="boardWrap" class="board-wrap">
+                        <canvas id="canvas" width="1200" height="700"></canvas>
+                        <canvas id="previewCanvas" width="1200" height="700"></canvas>
+                        <div id="textLayer" class="text-layer"></div>
+                        <div id="cursorLayer" class="cursor-layer"></div>
+                    </div>
+                </section>
+            </div>
+        </section>
+    </main>
+
+    <div id="toast" class="toast hidden"></div>
+
+    <script src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>

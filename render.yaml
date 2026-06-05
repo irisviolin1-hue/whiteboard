@@ -1,0 +1,20 @@
+services:
+  - type: web
+    name: whiteboard-v2
+    env: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn -k geventwebsocket.gunicorn.workers.GeventWebSocketWorker -w 1 --bind 0.0.0.0:$PORT server:app
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.11.9"
+      - key: SECRET_KEY
+        generateValue: true
+      - key: WHITEBOARD_DATA_FILE
+        value: data/rooms.json
+      - key: MAX_EVENTS_PER_ROOM
+        value: "30000"
+      - key: MAX_IMAGE_DATA_URL
+        value: "8000000"
+      - key: MAX_UNDO_DEPTH
+        value: "50"
