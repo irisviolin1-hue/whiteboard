@@ -74,6 +74,7 @@ let canUndo = false;
 let canRedo = false;
 
 const textBoxes = new Map();
+const imageBoxes = new Map();
 const remoteCursors = new Map();
 
 function uniqueId(prefix = "id") {
@@ -183,6 +184,7 @@ function clearLocalBoard() {
     previewCtx.clearRect(0, 0, els.previewCanvas.width, els.previewCanvas.height);
     initCanvas();
     textBoxes.clear();
+    imageBoxes.clear();
     els.textLayer.innerHTML = "";
 }
 
@@ -347,7 +349,7 @@ function emitDraw(point) {
     els.saveStatus.textContent = "儲存中...";
 }
 
-function addImageToCanvas(event, targetCtx = ctx) {
+function drawImageEvent(event, targetCtx = ctx) {
     return new Promise(resolve => {
         const img = new Image();
         img.onload = () => {
@@ -360,6 +362,165 @@ function addImageToCanvas(event, targetCtx = ctx) {
         };
         img.src = event.src;
     });
+}
+
+function applyImagePosition(el, data) {
+    el.style.left = canvasToPercentX(data.x);
+    el.style.top = canvasToPercentY(data.y);
+    el.style.width = canvasToPercentX(data.w);
+    el.style.height = canvasToPercentY(data.h);
+}
+
+function syncImageEventCache(data) {
+    const index = currentEvents.findIndex(event => event.type === "image" && event.id === data.id);
+    if (index >= 0) {
+        currentEvents[index] = { ...currentEvents[index], ...data };
+    }
+}
+
+function emitImageUpdate(id, patch) {
+    if (!room || replaying) return;
+    socket.emit("image_update", { room, id, ...patch });
+    els.saveStatus.textContent = "儲存中...";
+}
+
+function createImageBox(data) {
+    const existing = imageBoxes.get(data.id);
+    if (existing) {
+        updateImageBox(data);
+        return existing.element;
+    }
+
+    const box = document.createElement("div");
+    box.className = "image-box";
+    box.dataset.id = data.id;
+
+    const toolbar = document.createElement("div");
+    toolbar.className = "image-toolbar";
+
+    const dragHandle = document.createElement("span");
+    dragHandle.className = "image-drag-handle";
+    dragHandle.textContent = "⋮⋮ 移動圖片";
+
+    const deleteBtn = document.createElement("button");
+    deleteBtn.className = "delete-image-btn";
+    deleteBtn.type = "button";
+    deleteBtn.title = "刪除圖片";
+    deleteBtn.textContent = "×";
+
+    const img = document.createElement("img");
+    img.className = "board-image";
+    img.alt = "白板圖片";
+    img.draggable = false;
+    img.src = data.src;
+
+    const resizer = document.createElement("div");
+    resizer.className = "image-resizer";
+
+    toolbar.appendChild(dragHandle);
+    toolbar.appendChild(deleteBtn);
+    box.appendChild(toolbar);
+    box.appendChild(img);
+    box.appendChild(resizer);
+    els.textLayer.appendChild(box);
+
+    const normalized = {
+        ...data,
+        x: Number(data.x),
+        y: Number(data.y),
+        w: Number(data.w),
+        h: Number(data.h),
+    };
+    imageBoxes.set(data.id, { element: box, image: img, data: normalized });
+    applyImagePosition(box, normalized);
+
+    dragHandle.addEventListener("pointerdown", event => startDragImage(event, data.id));
+    img.addEventListener("pointerdown", event => {
+        if (tool === "select") startDragImage(event, data.id);
+    });
+    resizer.addEventListener("pointerdown", event => startResizeImage(event, data.id));
+    deleteBtn.addEventListener("click", event => {
+        event.preventDefault();
+        event.stopPropagation();
+        socket.emit("image_delete", { room, id: data.id });
+        els.saveStatus.textContent = "儲存中...";
+    });
+
+    return box;
+}
+
+function updateImageBox(data) {
+    const item = imageBoxes.get(data.id);
+    if (!item) {
+        createImageBox(data);
+        return;
+    }
+    item.data = { ...item.data, ...data };
+    if (data.src && item.image.src !== data.src) item.image.src = data.src;
+    applyImagePosition(item.element, item.data);
+    syncImageEventCache(item.data);
+}
+
+function deleteImageBox(id) {
+    const item = imageBoxes.get(id);
+    if (item) item.element.remove();
+    imageBoxes.delete(id);
+    currentEvents = currentEvents.filter(event => !(event.type === "image" && event.id === id));
+}
+
+function startDragImage(event, id) {
+    if (tool !== "select") return;
+    event.preventDefault();
+    event.stopPropagation();
+    const item = imageBoxes.get(id);
+    if (!item) return;
+    const startX = event.clientX;
+    const startY = event.clientY;
+    const initial = { ...item.data };
+    const rect = els.canvas.getBoundingClientRect();
+    const onMove = moveEvent => {
+        const dx = (moveEvent.clientX - startX) * (els.canvas.width / rect.width);
+        const dy = (moveEvent.clientY - startY) * (els.canvas.height / rect.height);
+        item.data.x = Math.max(0, Math.min(els.canvas.width - item.data.w, initial.x + dx));
+        item.data.y = Math.max(0, Math.min(els.canvas.height - item.data.h, initial.y + dy));
+        applyImagePosition(item.element, item.data);
+    };
+    const onUp = () => {
+        window.removeEventListener("pointermove", onMove);
+        window.removeEventListener("pointerup", onUp);
+        syncImageEventCache(item.data);
+        emitImageUpdate(id, { x: item.data.x, y: item.data.y });
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+}
+
+function startResizeImage(event, id) {
+    if (tool !== "select") return;
+    event.preventDefault();
+    event.stopPropagation();
+    const item = imageBoxes.get(id);
+    if (!item) return;
+    const startX = event.clientX;
+    const startY = event.clientY;
+    const initial = { ...item.data };
+    const rect = els.canvas.getBoundingClientRect();
+    const ratio = initial.w / Math.max(1, initial.h);
+    const onMove = moveEvent => {
+        const dw = (moveEvent.clientX - startX) * (els.canvas.width / rect.width);
+        const nextW = Math.max(60, Math.min(els.canvas.width - item.data.x, initial.w + dw));
+        item.data.w = nextW;
+        item.data.h = Math.max(45, Math.min(els.canvas.height - item.data.y, nextW / ratio));
+        applyImagePosition(item.element, item.data);
+    };
+    const onUp = () => {
+        window.removeEventListener("pointermove", onMove);
+        window.removeEventListener("pointerup", onUp);
+        syncImageEventCache(item.data);
+        emitImageUpdate(id, { w: item.data.w, h: item.data.h });
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
 }
 
 function addImageFile(file) {
@@ -663,7 +824,7 @@ async function replayState(state) {
     currentEvents = Array.isArray(state.events) ? state.events : [];
     for (const event of currentEvents) {
         if (event.type === "draw") drawLine(event);
-        if (event.type === "image") await addImageToCanvas(event);
+        if (event.type === "image") createImageBox(event);
         if (event.type === "shape") drawShape(event);
     }
     const texts = state.texts || {};
@@ -717,8 +878,33 @@ function drawTextBoxesForExport(targetCtx) {
         targetCtx.restore();
     });
 }
+function drawImagesForExport(targetCtx) {
+    const drawJobs = [];
+    imageBoxes.forEach(item => {
+        drawJobs.push(new Promise(resolve => {
+            const img = new Image();
+            img.onload = () => {
+                targetCtx.drawImage(img, item.data.x, item.data.y, item.data.w, item.data.h);
+                resolve();
+            };
+            img.onerror = () => resolve();
+            img.src = item.data.src;
+        }));
+    });
+    return Promise.all(drawJobs);
+}
 
-function exportBoard(type = "png") {
+function getEventSnapshot() {
+    return currentEvents.map(event => {
+        if (event.type === "image" && imageBoxes.has(event.id)) {
+            return { ...event, ...imageBoxes.get(event.id).data };
+        }
+        return event;
+    });
+}
+
+
+async function exportBoard(type = "png") {
     const out = document.createElement("canvas");
     out.width = els.canvas.width;
     out.height = els.canvas.height;
@@ -726,6 +912,7 @@ function exportBoard(type = "png") {
     outCtx.fillStyle = "#ffffff";
     outCtx.fillRect(0, 0, out.width, out.height);
     outCtx.drawImage(els.canvas, 0, 0);
+    await drawImagesForExport(outCtx);
     drawTextBoxesForExport(outCtx);
     const link = document.createElement("a");
     link.download = `${room || "whiteboard"}.${type}`;
@@ -747,7 +934,7 @@ function exportJson() {
         exported_at: new Date().toISOString(),
         room,
         snapshot: {
-            events: currentEvents,
+            events: getEventSnapshot(),
             texts: getTextSnapshot(),
         },
     };
@@ -1055,10 +1242,18 @@ socket.on("shape_add", data => {
     currentEvents.push(data);
     drawShape(data);
 });
-socket.on("image_add", async data => {
+socket.on("image_add", data => {
     if (!data || data.room !== room) return;
     currentEvents.push(data);
-    await addImageToCanvas(data);
+    createImageBox(data);
+});
+socket.on("image_update", data => {
+    if (!data || data.room !== room) return;
+    updateImageBox(data);
+});
+socket.on("image_delete", data => {
+    if (!data || data.room !== room) return;
+    deleteImageBox(data.id);
 });
 socket.on("text_add", data => {
     if (!data || data.room !== room) return;

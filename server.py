@@ -600,6 +600,67 @@ def handle_image_add(data):
     emit("image_add", event, to=room)
 
 
+@socketio.on("image_update")
+def handle_image_update(data):
+    data = data or {}
+    room = sanitize_room_name(data.get("room") or user_rooms.get(request.sid))
+    image_id = text_value(data.get("id"), 120)
+    if not image_id:
+        return
+
+    with state_lock:
+        room = ensure_room(room)
+        target = None
+        for event in rooms[room]["events"]:
+            if event.get("type") == "image" and event.get("id") == image_id:
+                target = event
+                break
+        if not target:
+            return
+
+        save_undo_snapshot(room)
+        if "x" in data:
+            target["x"] = number(data.get("x"), target.get("x", 50), -2000, 4000)
+        if "y" in data:
+            target["y"] = number(data.get("y"), target.get("y", 50), -2000, 4000)
+        if "w" in data:
+            target["w"] = number(data.get("w"), target.get("w", 320), 10, 4000)
+        if "h" in data:
+            target["h"] = number(data.get("h"), target.get("h", 240), 10, 4000)
+        target["updated_at"] = now_ms()
+        rooms[room]["updated_at"] = now_ms()
+        saved = persist_rooms()
+        emit_save_status(room, saved=saved)
+        payload = deepcopy(target)
+
+    emit("image_update", payload, to=room)
+
+
+@socketio.on("image_delete")
+def handle_image_delete(data):
+    data = data or {}
+    room = sanitize_room_name(data.get("room") or user_rooms.get(request.sid))
+    image_id = text_value(data.get("id"), 120)
+    if not image_id:
+        return
+
+    with state_lock:
+        room = ensure_room(room)
+        exists = any(event.get("type") == "image" and event.get("id") == image_id for event in rooms[room]["events"])
+        if not exists:
+            return
+        save_undo_snapshot(room)
+        rooms[room]["events"] = [
+            event for event in rooms[room]["events"]
+            if not (event.get("type") == "image" and event.get("id") == image_id)
+        ]
+        rooms[room]["updated_at"] = now_ms()
+        saved = persist_rooms(force=True)
+        emit_save_status(room, saved=saved)
+
+    emit("image_delete", {"room": room, "id": image_id}, to=room)
+
+
 @socketio.on("text_add")
 def handle_text_add(data):
     data = data or {}
